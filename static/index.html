@@ -1,0 +1,1468 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF Atomization</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .tree-node { margin-left: 1.5rem; }
+        .tree-node-root { margin-left: 0; }
+        .filtered { opacity: 0.5; }
+        .dropzone-active { border-color: #3b82f6; background-color: #eff6ff; }
+        .queue-item { cursor: pointer; transition: background-color 0.2s; }
+        .queue-item:hover { background-color: #f3f4f6; }
+        .queue-item.selected { background-color: #dbeafe; border-color: #3b82f6; }
+        .badge-atomic { background-color: #d1fae5; color: #065f46; }
+        .badge-needs-split { background-color: #fef3c7; color: #92400e; }
+        .badge-pending { background-color: #e5e7eb; color: #374151; }
+        .badge-approved { background-color: #d1fae5; color: #065f46; }
+        .content-preview { max-height: 200px; overflow-y: auto; }
+        .latex-content { font-family: 'Times New Roman', serif; }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen">
+    <!-- Navigation -->
+    <nav class="bg-white shadow-sm">
+        <div class="max-w-7xl mx-auto px-4">
+            <div class="flex justify-between h-16">
+                <div class="flex items-center">
+                    <h1 class="text-xl font-bold text-gray-900">PDF Atomization</h1>
+                </div>
+                <div class="flex space-x-4">
+                    <button onclick="showTab('process')" id="tab-process"
+                            class="tab-btn px-4 py-2 text-sm font-medium rounded-md bg-blue-100 text-blue-700">
+                        Process New PDF
+                    </button>
+                    <button onclick="showTab('merge')" id="tab-merge"
+                            class="tab-btn px-4 py-2 text-sm font-medium rounded-md text-gray-500 hover:text-gray-700">
+                        Merge Workflow
+                    </button>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="max-w-7xl mx-auto py-6 px-4">
+        <!-- Process Tab -->
+        <div id="panel-process" class="tab-panel">
+            <!-- Upload Section -->
+            <div id="upload-section" class="bg-white rounded-lg shadow p-6">
+                <h2 class="text-lg font-semibold mb-4">Upload PDF</h2>
+                <div id="dropzone"
+                     class="border-2 border-dashed border-gray-300 rounded-lg p-12 text-center cursor-pointer hover:border-gray-400 transition-colors">
+                    <input type="file" id="file-input" accept=".pdf" class="hidden">
+                    <svg class="mx-auto h-12 w-12 text-gray-400" stroke="currentColor" fill="none" viewBox="0 0 48 48">
+                        <path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8m-12 4h.02"
+                              stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                    <p class="mt-2 text-sm text-gray-600">
+                        <span class="font-medium text-blue-600 hover:text-blue-500">Click to upload</span>
+                        or drag and drop
+                    </p>
+                    <p class="mt-1 text-xs text-gray-500">PDF files only</p>
+                </div>
+            </div>
+
+            <!-- Progress Section -->
+            <div id="progress-section" class="hidden bg-white rounded-lg shadow p-6 mt-4">
+                <h2 class="text-lg font-semibold mb-4">Processing</h2>
+                <div class="mb-2 flex justify-between text-sm">
+                    <span id="progress-status">Starting...</span>
+                    <span id="progress-percent">0%</span>
+                </div>
+                <div class="w-full bg-gray-200 rounded-full h-2.5">
+                    <div id="progress-bar" class="bg-blue-600 h-2.5 rounded-full transition-all duration-300" style="width: 0%"></div>
+                </div>
+            </div>
+
+            <!-- Workflow Stage Indicator -->
+            <div id="workflow-indicator" class="hidden bg-white rounded-lg shadow p-4 mt-4">
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center space-x-4">
+                        <span class="step-indicator" id="step-1">1. Structure</span>
+                        <span class="text-gray-300">-></span>
+                        <span class="step-indicator" id="step-2">2. Atomization</span>
+                        <span class="text-gray-300">-></span>
+                        <span class="step-indicator" id="step-3">3. Content</span>
+                        <span class="text-gray-300">-></span>
+                        <span class="step-indicator" id="step-4">4. Export</span>
+                    </div>
+                    <span id="workflow-message" class="text-sm text-gray-600"></span>
+                </div>
+            </div>
+
+            <!-- OCR Text Review Section -->
+            <div id="ocr-review-section" class="hidden bg-white rounded-lg shadow p-6 mt-4">
+                <div class="flex justify-between items-center mb-4">
+                    <h2 class="text-lg font-semibold">Extracted Text (OCR Result)</h2>
+                    <div class="flex items-center space-x-3">
+                        <span id="ocr-text-length" class="text-sm text-gray-500"></span>
+                        <button onclick="toggleOcrText()" id="ocr-toggle-btn" class="px-3 py-1.5 text-sm border rounded-md hover:bg-gray-50">
+                            Show Full Text
+                        </button>
+                        <button onclick="dismissOcrReview()" class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 text-sm">
+                            Continue to Structure Review
+                        </button>
+                    </div>
+                </div>
+                <div id="ocr-text-preview" class="border rounded-lg p-4 bg-gray-50 max-h-64 overflow-y-auto">
+                    <pre id="ocr-preview-content" class="text-sm whitespace-pre-wrap font-mono text-gray-800"></pre>
+                </div>
+                <div id="ocr-text-full" class="hidden border rounded-lg p-4 bg-gray-50 max-h-[70vh] overflow-y-auto">
+                    <pre id="ocr-full-content" class="text-sm whitespace-pre-wrap font-mono text-gray-800"></pre>
+                </div>
+                <p class="mt-2 text-sm text-gray-500">
+                    Review the extracted text to verify OCR quality before proceeding.
+                </p>
+            </div>
+
+            <!-- Step 1: Structure Approval Section -->
+            <div id="structure-approval-section" class="hidden bg-white rounded-lg shadow p-6 mt-4">
+                <div class="flex justify-between items-center mb-4">
+                    <h2 class="text-lg font-semibold">Step 1: Review Document Structure</h2>
+                    <button onclick="approveStructure()" class="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700">
+                        Approve Structure & Continue
+                    </button>
+                </div>
+
+                <!-- Stats -->
+                <div id="stats" class="mb-4 p-4 bg-gray-50 rounded-lg text-sm">
+                    <div class="grid grid-cols-4 gap-4">
+                        <div><span class="font-medium">Title:</span> <span id="stat-title"></span></div>
+                        <div><span class="font-medium">Pages:</span> <span id="stat-pages"></span></div>
+                        <div><span class="font-medium">Sections:</span> <span id="stat-sections"></span></div>
+                        <div><span class="font-medium">Filtered:</span> <span id="stat-filtered"></span></div>
+                    </div>
+                </div>
+
+                <!-- Tree View -->
+                <div id="tree-view" class="border rounded-lg p-4 max-h-96 overflow-y-auto">
+                    <!-- Tree nodes will be rendered here -->
+                </div>
+
+                <p class="mt-2 text-sm text-gray-500">
+                    Click on greyed-out sections to include them in export. Review the structure before approving.
+                </p>
+            </div>
+
+            <!-- Step 2: Atomization Approval Section -->
+            <div id="atomization-approval-section" class="hidden bg-white rounded-lg shadow mt-4">
+                <div class="p-4 border-b">
+                    <div class="flex justify-between items-center">
+                        <h2 class="text-lg font-semibold">Step 2: Review Atomization Decisions</h2>
+                        <div class="flex items-center space-x-4">
+                            <span id="atomization-progress" class="text-sm text-gray-600">0 of 0 reviewed</span>
+                            <button onclick="approveAllAtomization()" id="approve-all-atomization-btn"
+                                    class="px-3 py-2 bg-gray-600 text-white rounded-md hover:bg-gray-700 text-sm">
+                                Approve All Remaining
+                            </button>
+                            <button onclick="proceedToContent()" id="proceed-to-content-btn"
+                                    class="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed" disabled>
+                                Proceed to Content Review
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="flex">
+                    <!-- Left Panel: Queue List -->
+                    <div class="w-1/3 border-r max-h-[600px] overflow-y-auto">
+                        <div id="atomization-queue" class="divide-y">
+                            <!-- Queue items rendered here -->
+                        </div>
+                    </div>
+
+                    <!-- Right Panel: Detail View -->
+                    <div class="w-2/3 p-4">
+                        <div id="atomization-detail" class="hidden">
+                            <!-- Breadcrumb -->
+                            <div id="atomization-breadcrumb" class="text-sm text-gray-500 mb-2"></div>
+
+                            <!-- Title -->
+                            <h3 id="atomization-node-title" class="text-xl font-semibold mb-4"></h3>
+
+                            <!-- AI Decision Card -->
+                            <div class="bg-gray-50 rounded-lg p-4 mb-4">
+                                <h4 class="font-medium mb-2">AI Analysis</h4>
+                                <div class="flex items-center space-x-4 mb-2">
+                                    <span id="atomization-decision-badge" class="px-2 py-1 rounded text-sm"></span>
+                                    <span id="atomization-atom-type" class="text-sm text-gray-600"></span>
+                                </div>
+                                <p id="atomization-reason" class="text-sm text-gray-700"></p>
+                            </div>
+
+                            <!-- Node Content Viewer -->
+                            <div class="mb-4">
+                                <div class="flex items-center space-x-3 mb-2">
+                                    <button onclick="toggleAtomizationContent('preview')" id="atom-content-preview-btn"
+                                            class="text-sm px-2 py-1 rounded bg-gray-200 text-gray-700 hover:bg-gray-300">
+                                        Preview
+                                    </button>
+                                    <button onclick="toggleAtomizationContent('full')" id="atom-content-full-btn"
+                                            class="text-sm px-2 py-1 rounded text-blue-600 hover:bg-blue-50">
+                                        Full Content
+                                    </button>
+                                    <span id="atomization-content-length" class="text-xs text-gray-400"></span>
+                                </div>
+                                <div id="atomization-content-preview" class="hidden bg-gray-50 rounded p-3 text-sm font-mono max-h-48 overflow-y-auto whitespace-pre-wrap"></div>
+                                <div id="atomization-content-full" class="hidden bg-gray-50 rounded p-3 text-sm font-mono max-h-[60vh] overflow-y-auto whitespace-pre-wrap"></div>
+                            </div>
+
+                            <!-- Action Buttons -->
+                            <div class="flex space-x-3">
+                                <button onclick="approveAtomization()" class="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700">
+                                    Agree
+                                </button>
+                                <button onclick="regenerateAtomization()" class="px-4 py-2 bg-yellow-600 text-white rounded-md hover:bg-yellow-700">
+                                    Regenerate
+                                </button>
+                                <button onclick="splitNode()" class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700">
+                                    Disagree, Split Further
+                                </button>
+                            </div>
+                        </div>
+
+                        <div id="atomization-empty" class="text-center text-gray-500 py-12">
+                            Select a node from the queue to review
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Step 3: Content Approval Section -->
+            <div id="content-approval-section" class="hidden bg-white rounded-lg shadow mt-4">
+                <div class="p-4 border-b">
+                    <div class="flex justify-between items-center">
+                        <h2 class="text-lg font-semibold">Step 3: Review Content Summaries</h2>
+                        <div class="flex items-center space-x-4">
+                            <span id="content-progress" class="text-sm text-gray-600">0 of 0 reviewed</span>
+                            <button onclick="approveAllContent()" id="approve-all-content-btn"
+                                    class="px-3 py-2 bg-gray-600 text-white rounded-md hover:bg-gray-700 text-sm">
+                                Approve All Remaining
+                            </button>
+                            <button onclick="completeWorkflow()" id="complete-btn"
+                                    class="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed" disabled>
+                                Complete & Export
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="flex">
+                    <!-- Left Panel: Queue List -->
+                    <div class="w-1/3 border-r max-h-[600px] overflow-y-auto">
+                        <div id="content-queue" class="divide-y">
+                            <!-- Queue items rendered here -->
+                        </div>
+                    </div>
+
+                    <!-- Right Panel: Detail View -->
+                    <div class="w-2/3 p-4">
+                        <div id="content-detail" class="hidden">
+                            <!-- Breadcrumb -->
+                            <div id="content-breadcrumb" class="text-sm text-gray-500 mb-2"></div>
+
+                            <!-- Title -->
+                            <h3 id="content-node-title" class="text-xl font-semibold mb-4"></h3>
+
+                            <!-- Source Text -->
+                            <div class="mb-4">
+                                <button onclick="toggleContentPreview('source')" class="text-sm text-blue-600 hover:text-blue-800 mb-2">
+                                    Toggle Source Text
+                                </button>
+                                <div id="source-content-preview" class="hidden content-preview bg-gray-50 rounded p-3 text-sm font-mono"></div>
+                            </div>
+
+                            <!-- AI Generated Content -->
+                            <div class="bg-gray-50 rounded-lg p-4 mb-4">
+                                <h4 class="font-medium mb-3">AI-Generated Summary</h4>
+
+                                <div class="space-y-3">
+                                    <div>
+                                        <label class="text-sm font-medium text-gray-700">Description</label>
+                                        <p id="content-description" class="text-sm mt-1"></p>
+                                    </div>
+
+                                    <div>
+                                        <label class="text-sm font-medium text-gray-700">Statement</label>
+                                        <p id="content-statement" class="text-sm mt-1 latex-content"></p>
+                                    </div>
+
+                                    <div id="content-proof-section" class="hidden">
+                                        <label class="text-sm font-medium text-gray-700">Proof</label>
+                                        <p id="content-proof" class="text-sm mt-1 latex-content"></p>
+                                    </div>
+
+                                    <div id="content-lemmas-section" class="hidden">
+                                        <label class="text-sm font-medium text-gray-700">Lemmas</label>
+                                        <ul id="content-lemmas" class="text-sm mt-1 list-disc list-inside"></ul>
+                                    </div>
+
+                                    <div id="content-related-section" class="hidden">
+                                        <label class="text-sm font-medium text-gray-700">Related Content</label>
+                                        <p id="content-related" class="text-sm mt-1"></p>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Action Buttons -->
+                            <div class="flex space-x-3">
+                                <button onclick="approveContent()" class="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700">
+                                    Approve
+                                </button>
+                                <button onclick="regenerateContent()" class="px-4 py-2 bg-yellow-600 text-white rounded-md hover:bg-yellow-700">
+                                    Regenerate
+                                </button>
+                                <button onclick="openEditModal()" class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700">
+                                    Edit Manually
+                                </button>
+                            </div>
+                        </div>
+
+                        <div id="content-empty" class="text-center text-gray-500 py-12">
+                            Select a node from the queue to review
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Preview Section (legacy, now used after completion) -->
+            <div id="preview-section" class="hidden bg-white rounded-lg shadow p-6 mt-4">
+                <div class="flex justify-between items-center mb-4">
+                    <h2 class="text-lg font-semibold">Document Ready for Export</h2>
+                    <div class="space-x-2">
+                        <button onclick="exportToFolder()" class="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700">
+                            Export to Folder
+                        </button>
+                        <button onclick="downloadZip()" class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700">
+                            Download ZIP
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Final Tree View -->
+                <div id="final-tree-view" class="border rounded-lg p-4 max-h-96 overflow-y-auto">
+                    <!-- Tree nodes will be rendered here -->
+                </div>
+            </div>
+
+            <!-- Export Result -->
+            <div id="export-result" class="hidden bg-white rounded-lg shadow p-6 mt-4">
+                <h2 class="text-lg font-semibold mb-4 text-green-600">Export Complete!</h2>
+                <p id="export-message" class="text-gray-600"></p>
+            </div>
+        </div>
+
+        <!-- Merge Tab -->
+        <div id="panel-merge" class="tab-panel hidden">
+            <div class="grid grid-cols-2 gap-6">
+                <!-- Left: Existing Vault -->
+                <div class="bg-white rounded-lg shadow p-6">
+                    <h2 class="text-lg font-semibold mb-4">Existing Vault</h2>
+                    <div id="vault-dropzone"
+                         class="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center cursor-pointer hover:border-gray-400">
+                        <input type="file" id="vault-input" accept=".zip" class="hidden">
+                        <p class="text-sm text-gray-600">
+                            <span class="font-medium text-blue-600">Upload</span> a previously exported vault (ZIP)
+                        </p>
+                    </div>
+                    <div id="vault-info" class="hidden mt-4 p-4 bg-gray-50 rounded-lg">
+                        <h3 id="vault-name" class="font-medium"></h3>
+                        <p id="vault-stats" class="text-sm text-gray-500"></p>
+                    </div>
+                </div>
+
+                <!-- Right: New PDF -->
+                <div class="bg-white rounded-lg shadow p-6">
+                    <h2 class="text-lg font-semibold mb-4">New PDF to Merge</h2>
+                    <div id="merge-dropzone"
+                         class="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center cursor-pointer hover:border-gray-400">
+                        <input type="file" id="merge-input" accept=".pdf" class="hidden">
+                        <p class="text-sm text-gray-600">
+                            <span class="font-medium text-blue-600">Upload</span> new PDF to merge
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Merge Preview -->
+            <div id="merge-preview" class="hidden bg-white rounded-lg shadow p-6 mt-6">
+                <h2 class="text-lg font-semibold mb-4">Merge Preview</h2>
+                <p class="text-gray-500">Merge functionality coming in Phase 2</p>
+            </div>
+        </div>
+    </main>
+
+    <!-- Edit Modal -->
+    <div id="edit-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+        <div class="bg-white rounded-lg shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto m-4">
+            <div class="p-6">
+                <div class="flex justify-between items-center mb-4">
+                    <h3 class="text-lg font-semibold">Edit Content</h3>
+                    <button onclick="closeEditModal()" class="text-gray-400 hover:text-gray-600">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                        </svg>
+                    </button>
+                </div>
+
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Description *</label>
+                        <textarea id="edit-description" rows="2" class="w-full border rounded-md p-2 text-sm"></textarea>
+                    </div>
+
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Statement *</label>
+                        <textarea id="edit-statement" rows="4" class="w-full border rounded-md p-2 text-sm font-mono"></textarea>
+                    </div>
+
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Proof (optional)</label>
+                        <textarea id="edit-proof" rows="4" class="w-full border rounded-md p-2 text-sm font-mono"></textarea>
+                    </div>
+
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Related Content (optional)</label>
+                        <textarea id="edit-related" rows="2" class="w-full border rounded-md p-2 text-sm"></textarea>
+                    </div>
+                </div>
+
+                <div class="flex justify-end space-x-3 mt-6">
+                    <button onclick="closeEditModal()" class="px-4 py-2 border rounded-md hover:bg-gray-50">
+                        Cancel
+                    </button>
+                    <button onclick="saveEdit()" class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700">
+                        Save Changes
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Global error handler
+        window.onerror = function(msg, url, lineNo, columnNo, error) {
+            console.error('Global error:', msg, 'at', url, lineNo, columnNo);
+            alert('JavaScript error: ' + msg);
+            return false;
+        };
+
+        // State
+        let currentJobId = null;
+        let pollInterval = null;
+        let workflowStage = null;
+        let atomizationQueue = [];
+        let selectedAtomizationNode = null;
+        let contentQueue = [];
+        let selectedContentNode = null;
+
+        // Tab switching
+        function showTab(tab) {
+            document.querySelectorAll('.tab-panel').forEach(p => p.classList.add('hidden'));
+            document.querySelectorAll('.tab-btn').forEach(b => {
+                b.classList.remove('bg-blue-100', 'text-blue-700');
+                b.classList.add('text-gray-500');
+            });
+
+            document.getElementById(`panel-${tab}`).classList.remove('hidden');
+            const btn = document.getElementById(`tab-${tab}`);
+            btn.classList.add('bg-blue-100', 'text-blue-700');
+            btn.classList.remove('text-gray-500');
+        }
+
+        // File upload handling
+        const dropzone = document.getElementById('dropzone');
+        const fileInput = document.getElementById('file-input');
+
+        dropzone.addEventListener('click', () => fileInput.click());
+        dropzone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropzone.classList.add('dropzone-active');
+        });
+        dropzone.addEventListener('dragleave', () => {
+            dropzone.classList.remove('dropzone-active');
+        });
+        dropzone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropzone.classList.remove('dropzone-active');
+            const files = e.dataTransfer.files;
+            if (files.length > 0 && files[0].type === 'application/pdf') {
+                uploadFile(files[0]);
+            }
+        });
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                uploadFile(e.target.files[0]);
+            }
+        });
+
+        async function uploadFile(file) {
+            const formData = new FormData();
+            formData.append('file', file);
+
+            // Show progress section
+            document.getElementById('upload-section').classList.add('hidden');
+            document.getElementById('progress-section').classList.remove('hidden');
+
+            try {
+                const response = await fetch('/api/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    throw new Error('Upload failed');
+                }
+
+                const data = await response.json();
+                currentJobId = data.job_id;
+
+                // Start polling for status
+                startPolling();
+            } catch (error) {
+                alert('Upload failed: ' + error.message);
+                resetUpload();
+            }
+        }
+
+        function startPolling() {
+            pollInterval = setInterval(async () => {
+                try {
+                    const response = await fetch(`/api/status/${currentJobId}`);
+                    const data = await response.json();
+
+                    updateProgress(data);
+                    console.log('Poll status:', data.status, 'Progress:', data.progress);
+
+                    if (data.status === 'completed') {
+                        console.log('Status is completed, checking workflow stage...');
+                        clearInterval(pollInterval);
+                        // Check workflow stage
+                        await checkWorkflowStage();
+                    } else if (data.status === 'failed') {
+                        clearInterval(pollInterval);
+                        alert('Processing failed: ' + data.error);
+                        resetUpload();
+                    }
+                } catch (error) {
+                    console.error('Polling error:', error);
+                }
+            }, 1000);
+        }
+
+        function updateProgress(data) {
+            document.getElementById('progress-status').textContent = data.message;
+            document.getElementById('progress-percent').textContent = Math.round(data.progress * 100) + '%';
+            document.getElementById('progress-bar').style.width = (data.progress * 100) + '%';
+        }
+
+        async function checkWorkflowStage() {
+            try {
+                console.log('Checking workflow stage for job:', currentJobId);
+                const response = await fetch(`/api/workflow/${currentJobId}`);
+                console.log('Workflow response status:', response.status);
+
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    console.error('Workflow endpoint error:', errorText);
+                    alert('Failed to get workflow status: ' + errorText);
+                    return;
+                }
+
+                const data = await response.json();
+                console.log('Workflow data:', data);
+                workflowStage = data.workflow_stage;
+
+                updateWorkflowIndicator(workflowStage);
+
+                // Hide progress, show appropriate section
+                document.getElementById('progress-section').classList.add('hidden');
+                document.getElementById('workflow-indicator').classList.remove('hidden');
+
+                console.log('Current workflow stage:', workflowStage);
+
+                if (workflowStage === 'awaiting_structure_approval') {
+                    console.log('Loading OCR text review...');
+                    await loadOcrReview();
+                } else if (workflowStage === 'awaiting_atomization_approval') {
+                    console.log('Loading atomization approval...');
+                    await loadAtomizationApproval();
+                } else if (workflowStage === 'awaiting_content_approval') {
+                    console.log('Loading content approval...');
+                    await loadContentApproval();
+                } else if (workflowStage === 'completed') {
+                    console.log('Loading final preview...');
+                    await loadFinalPreview();
+                } else {
+                    console.log('Unknown workflow stage:', workflowStage);
+                }
+            } catch (error) {
+                console.error('Failed to check workflow stage:', error);
+                alert('Error checking workflow stage: ' + error.message);
+            }
+        }
+
+        function updateWorkflowIndicator(stage) {
+            const steps = ['step-1', 'step-2', 'step-3', 'step-4'];
+            const stageMap = {
+                'awaiting_structure_approval': 0,
+                'atomizing': 1,
+                'awaiting_atomization_approval': 1,
+                'filling_content': 2,
+                'awaiting_content_approval': 2,
+                'completed': 3
+            };
+
+            const currentStep = stageMap[stage] || 0;
+
+            steps.forEach((stepId, index) => {
+                const el = document.getElementById(stepId);
+                el.classList.remove('text-blue-600', 'font-semibold', 'text-green-600');
+                if (index < currentStep) {
+                    el.classList.add('text-green-600');
+                } else if (index === currentStep) {
+                    el.classList.add('text-blue-600', 'font-semibold');
+                }
+            });
+        }
+
+        async function loadStructureApproval() {
+            console.log('loadStructureApproval() called');
+            try {
+                console.log('Loading structure approval for job:', currentJobId);
+
+                // First hide all sections and show the structure approval section
+                // This shows a loading state even if API calls fail
+                hideAllSections();
+
+                const response = await fetch(`/api/preview/${currentJobId}`);
+                console.log('Preview response status:', response.status);
+
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    console.error('Preview endpoint error:', errorText);
+                    alert('Failed to load preview: ' + errorText);
+                    return;
+                }
+
+                const data = await response.json();
+                console.log('Preview data received, has structure:', !!data.structure);
+
+                // Load stats
+                const statsResponse = await fetch(`/api/preview/${currentJobId}/stats`);
+                console.log('Stats response status:', statsResponse.status);
+
+                if (!statsResponse.ok) {
+                    const errorText = await statsResponse.text();
+                    console.error('Stats endpoint error:', errorText);
+                    alert('Failed to load stats: ' + errorText);
+                    return;
+                }
+
+                const stats = await statsResponse.json();
+                console.log('Stats data:', stats);
+
+                document.getElementById('stat-title').textContent = stats.title || 'Unknown';
+                document.getElementById('stat-pages').textContent = stats.total_pages || 0;
+                document.getElementById('stat-sections').textContent = stats.included_sections || 0;
+                document.getElementById('stat-filtered').textContent = stats.filtered_sections || 0;
+
+                // Render tree
+                if (data.structure) {
+                    renderTree(data.structure);
+                } else {
+                    console.error('No structure in preview data');
+                    document.getElementById('tree-view').innerHTML = '<p class="text-red-500">No structure available</p>';
+                }
+
+                // Show structure approval section
+                document.getElementById('structure-approval-section').classList.remove('hidden');
+                console.log('Structure approval section shown successfully');
+            } catch (error) {
+                console.error('Error in loadStructureApproval:', error);
+                alert('Failed to load structure: ' + error.message);
+                // Still try to show the section even on error
+                document.getElementById('structure-approval-section').classList.remove('hidden');
+            }
+        }
+
+        async function loadAtomizationApproval() {
+            try {
+                const response = await fetch(`/api/workflow/${currentJobId}/atomization-queue`);
+                atomizationQueue = await response.json();
+
+                renderAtomizationQueue();
+
+                hideAllSections();
+                document.getElementById('atomization-approval-section').classList.remove('hidden');
+
+                updateAtomizationProgress();
+            } catch (error) {
+                alert('Failed to load atomization queue: ' + error.message);
+            }
+        }
+
+        async function loadContentApproval() {
+            try {
+                const response = await fetch(`/api/workflow/${currentJobId}/content-queue`);
+                contentQueue = await response.json();
+
+                renderContentQueue();
+
+                hideAllSections();
+                document.getElementById('content-approval-section').classList.remove('hidden');
+
+                updateContentProgress();
+            } catch (error) {
+                alert('Failed to load content queue: ' + error.message);
+            }
+        }
+
+        async function loadFinalPreview() {
+            try {
+                const response = await fetch(`/api/preview/${currentJobId}`);
+                const data = await response.json();
+
+                renderFinalTree(data.structure);
+
+                hideAllSections();
+                document.getElementById('preview-section').classList.remove('hidden');
+            } catch (error) {
+                alert('Failed to load preview: ' + error.message);
+            }
+        }
+
+        function hideAllSections() {
+            document.getElementById('ocr-review-section').classList.add('hidden');
+            document.getElementById('structure-approval-section').classList.add('hidden');
+            document.getElementById('atomization-approval-section').classList.add('hidden');
+            document.getElementById('content-approval-section').classList.add('hidden');
+            document.getElementById('preview-section').classList.add('hidden');
+        }
+
+        // Structure approval
+        async function approveStructure() {
+            try {
+                document.getElementById('progress-section').classList.remove('hidden');
+                document.getElementById('structure-approval-section').classList.add('hidden');
+                document.getElementById('progress-status').textContent = 'Analyzing atomicity...';
+                document.getElementById('progress-bar').style.width = '50%';
+
+                const response = await fetch(`/api/workflow/${currentJobId}/approve-structure`, {
+                    method: 'POST'
+                });
+
+                if (!response.ok) {
+                    throw new Error('Failed to approve structure');
+                }
+
+                const data = await response.json();
+                await checkWorkflowStage();
+            } catch (error) {
+                alert('Error: ' + error.message);
+                await checkWorkflowStage();
+            }
+        }
+
+        // Atomization approval
+        function renderAtomizationQueue() {
+            const container = document.getElementById('atomization-queue');
+            container.innerHTML = '';
+
+            atomizationQueue.forEach(item => {
+                const div = document.createElement('div');
+                div.className = `queue-item p-3 border-l-4 ${item.approval_status === 'approved' ? 'border-green-500 bg-green-50' : 'border-gray-300'}`;
+                div.onclick = () => selectAtomizationNode(item);
+
+                const statusBadge = item.is_atomic ? 'badge-atomic' : 'badge-needs-split';
+                const statusText = item.is_atomic ? 'Atomic' : 'Needs Split';
+
+                div.innerHTML = `
+                    <div class="flex items-center justify-between">
+                        <span class="font-medium text-sm truncate flex-1">${item.title}</span>
+                        <span class="px-2 py-0.5 text-xs rounded ${statusBadge}">${statusText}</span>
+                    </div>
+                    <div class="text-xs text-gray-500 mt-1 truncate">${item.path.join(' > ')}</div>
+                `;
+
+                if (selectedAtomizationNode && selectedAtomizationNode.node_id === item.node_id) {
+                    div.classList.add('selected');
+                }
+
+                container.appendChild(div);
+            });
+        }
+
+        async function selectAtomizationNode(item) {
+            selectedAtomizationNode = item;
+
+            // Update queue selection
+            document.querySelectorAll('#atomization-queue .queue-item').forEach(el => {
+                el.classList.remove('selected');
+            });
+
+            // Show detail view
+            document.getElementById('atomization-empty').classList.add('hidden');
+            document.getElementById('atomization-detail').classList.remove('hidden');
+
+            // Populate detail
+            document.getElementById('atomization-breadcrumb').textContent = item.path.join(' > ');
+            document.getElementById('atomization-node-title').textContent = item.title;
+
+            const badge = document.getElementById('atomization-decision-badge');
+            if (item.is_atomic) {
+                badge.textContent = 'Atomic';
+                badge.className = 'px-2 py-1 rounded text-sm badge-atomic';
+            } else {
+                badge.textContent = 'Needs Splitting';
+                badge.className = 'px-2 py-1 rounded text-sm badge-needs-split';
+            }
+
+            document.getElementById('atomization-atom-type').textContent = item.atom_type ? `Type: ${item.atom_type}` : '';
+            document.getElementById('atomization-reason').textContent = item.ai_reason || 'No reason provided.';
+
+            // Populate content preview
+            document.getElementById('atomization-content-preview').textContent = item.content_preview;
+
+            // Populate full content - use inline data if available, otherwise fetch from API
+            let fullContent = item.full_content || '';
+            if (!fullContent || fullContent.length <= (item.content_preview || '').length) {
+                // Fetch full content from API
+                try {
+                    const resp = await fetch(`/api/workflow/${currentJobId}/atomization/${item.node_id}/content`);
+                    if (resp.ok) {
+                        const data = await resp.json();
+                        fullContent = data.source_text || data.content || item.content_preview;
+                        // Cache it on the item
+                        item.full_content = fullContent;
+                    }
+                } catch (e) {
+                    console.error('Failed to fetch full content:', e);
+                    fullContent = item.content_preview;
+                }
+            }
+
+            document.getElementById('atomization-content-full').textContent = fullContent;
+            const contentLen = fullContent.length;
+            document.getElementById('atomization-content-length').textContent = `${contentLen.toLocaleString()} chars`;
+
+            // Reset content view state - show preview by default
+            document.getElementById('atomization-content-preview').classList.remove('hidden');
+            document.getElementById('atomization-content-full').classList.add('hidden');
+            const previewBtn = document.getElementById('atom-content-preview-btn');
+            const fullBtn = document.getElementById('atom-content-full-btn');
+            previewBtn.classList.add('bg-gray-200', 'text-gray-700');
+            previewBtn.classList.remove('text-blue-600');
+            fullBtn.classList.remove('bg-gray-200', 'text-gray-700');
+            fullBtn.classList.add('text-blue-600');
+
+            renderAtomizationQueue();
+        }
+
+        function updateAtomizationProgress() {
+            const pending = atomizationQueue.filter(n => n.approval_status !== 'approved').length;
+            const total = atomizationQueue.length;
+            const reviewed = total - pending;
+            document.getElementById('atomization-progress').textContent = `${reviewed} of ${total} reviewed`;
+            // Enable proceed button only when all are reviewed
+            document.getElementById('proceed-to-content-btn').disabled = pending > 0;
+        }
+
+        async function approveAllAtomization() {
+            const pending = atomizationQueue.filter(n => n.approval_status !== 'approved');
+            if (pending.length === 0) return;
+
+            const needsSplit = pending.filter(n => !n.is_atomic).length;
+            const msg = needsSplit > 0
+                ? `This will auto-split ${needsSplit} non-atomic nodes, then approve all ${pending.length} nodes. Continue?`
+                : `Approve all ${pending.length} remaining nodes?`;
+
+            if (!confirm(msg)) return;
+
+            try {
+                // Show progress
+                document.getElementById('atomization-progress').textContent = 'Processing... (splitting & approving)';
+                document.getElementById('approve-all-atomization-btn').disabled = true;
+
+                const response = await fetch(`/api/workflow/${currentJobId}/approve-all-atomization`, {
+                    method: 'POST'
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'Failed to approve all');
+                }
+
+                // Reload queue to reflect new state
+                await loadAtomizationApproval();
+            } catch (error) {
+                alert('Error: ' + error.message);
+                await loadAtomizationApproval();
+            } finally {
+                document.getElementById('approve-all-atomization-btn').disabled = false;
+            }
+        }
+
+        async function approveAtomization() {
+            if (!selectedAtomizationNode) return;
+
+            try {
+                const response = await fetch(`/api/workflow/${currentJobId}/atomization/${selectedAtomizationNode.node_id}/approve`, {
+                    method: 'POST'
+                });
+
+                if (!response.ok) throw new Error('Failed to approve');
+
+                // Update local state
+                const item = atomizationQueue.find(n => n.node_id === selectedAtomizationNode.node_id);
+                if (item) item.approval_status = 'approved';
+
+                renderAtomizationQueue();
+                updateAtomizationProgress();
+
+                // Move to next pending
+                selectNextPending('atomization');
+            } catch (error) {
+                alert('Error: ' + error.message);
+            }
+        }
+
+        async function regenerateAtomization() {
+            if (!selectedAtomizationNode) return;
+
+            try {
+                document.getElementById('atomization-reason').textContent = 'Regenerating...';
+
+                const response = await fetch(`/api/workflow/${currentJobId}/atomization/${selectedAtomizationNode.node_id}/regenerate`, {
+                    method: 'POST'
+                });
+
+                if (!response.ok) throw new Error('Failed to regenerate');
+
+                const data = await response.json();
+
+                // Update local state
+                const item = atomizationQueue.find(n => n.node_id === selectedAtomizationNode.node_id);
+                if (item) {
+                    item.is_atomic = data.is_atomic;
+                    item.atom_type = data.atom_type;
+                    item.ai_reason = data.reason;
+                }
+
+                selectAtomizationNode(item);
+            } catch (error) {
+                alert('Error: ' + error.message);
+            }
+        }
+
+        async function splitNode() {
+            if (!selectedAtomizationNode) return;
+
+            try {
+                document.getElementById('atomization-reason').textContent = 'Splitting...';
+
+                const response = await fetch(`/api/workflow/${currentJobId}/atomization/${selectedAtomizationNode.node_id}/split`, {
+                    method: 'POST'
+                });
+
+                if (!response.ok) throw new Error('Failed to split');
+
+                const data = await response.json();
+
+                if (!data.success) {
+                    alert(data.message);
+                    return;
+                }
+
+                // Reload queue
+                await loadAtomizationApproval();
+            } catch (error) {
+                alert('Error: ' + error.message);
+            }
+        }
+
+        async function proceedToContent() {
+            try {
+                document.getElementById('progress-section').classList.remove('hidden');
+                document.getElementById('atomization-approval-section').classList.add('hidden');
+                document.getElementById('progress-status').textContent = 'Generating content summaries...';
+                document.getElementById('progress-bar').style.width = '70%';
+
+                const response = await fetch(`/api/workflow/${currentJobId}/proceed-to-content`, {
+                    method: 'POST'
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'Failed to proceed');
+                }
+
+                await checkWorkflowStage();
+            } catch (error) {
+                alert('Error: ' + error.message);
+                await checkWorkflowStage();
+            }
+        }
+
+        // Content approval
+        function renderContentQueue() {
+            const container = document.getElementById('content-queue');
+            container.innerHTML = '';
+
+            contentQueue.forEach(item => {
+                const div = document.createElement('div');
+                div.className = `queue-item p-3 border-l-4 ${item.approval_status === 'approved' ? 'border-green-500 bg-green-50' : 'border-gray-300'}`;
+                div.onclick = () => selectContentNode(item);
+
+                div.innerHTML = `
+                    <div class="flex items-center justify-between">
+                        <span class="font-medium text-sm truncate flex-1">${item.title}</span>
+                        <span class="px-2 py-0.5 text-xs rounded bg-purple-100 text-purple-700">${item.atom_type || 'content'}</span>
+                    </div>
+                    <div class="text-xs text-gray-500 mt-1 truncate">${item.path.join(' > ')}</div>
+                `;
+
+                if (selectedContentNode && selectedContentNode.node_id === item.node_id) {
+                    div.classList.add('selected');
+                }
+
+                container.appendChild(div);
+            });
+        }
+
+        function selectContentNode(item) {
+            selectedContentNode = item;
+
+            document.querySelectorAll('#content-queue .queue-item').forEach(el => {
+                el.classList.remove('selected');
+            });
+
+            document.getElementById('content-empty').classList.add('hidden');
+            document.getElementById('content-detail').classList.remove('hidden');
+
+            document.getElementById('content-breadcrumb').textContent = item.path.join(' > ');
+            document.getElementById('content-node-title').textContent = item.title;
+            document.getElementById('source-content-preview').textContent = item.source_text_preview;
+
+            if (item.atom_content) {
+                document.getElementById('content-description').textContent = item.atom_content.description;
+                document.getElementById('content-statement').textContent = item.atom_content.statement;
+
+                if (item.atom_content.proof) {
+                    document.getElementById('content-proof').textContent = item.atom_content.proof;
+                    document.getElementById('content-proof-section').classList.remove('hidden');
+                } else {
+                    document.getElementById('content-proof-section').classList.add('hidden');
+                }
+
+                if (item.atom_content.lemmas && item.atom_content.lemmas.length > 0) {
+                    const lemmasList = document.getElementById('content-lemmas');
+                    lemmasList.innerHTML = item.atom_content.lemmas.map(l => `<li>${l}</li>`).join('');
+                    document.getElementById('content-lemmas-section').classList.remove('hidden');
+                } else {
+                    document.getElementById('content-lemmas-section').classList.add('hidden');
+                }
+
+                if (item.atom_content.related_content) {
+                    document.getElementById('content-related').textContent = item.atom_content.related_content;
+                    document.getElementById('content-related-section').classList.remove('hidden');
+                } else {
+                    document.getElementById('content-related-section').classList.add('hidden');
+                }
+            }
+
+            renderContentQueue();
+        }
+
+        function updateContentProgress() {
+            const approved = contentQueue.filter(n => n.approval_status === 'approved').length;
+            const total = contentQueue.length;
+            document.getElementById('content-progress').textContent = `${approved} of ${total} reviewed`;
+            document.getElementById('complete-btn').disabled = approved < total;
+        }
+
+        async function approveContent() {
+            if (!selectedContentNode) return;
+
+            try {
+                const response = await fetch(`/api/workflow/${currentJobId}/content/${selectedContentNode.node_id}/approve`, {
+                    method: 'POST'
+                });
+
+                if (!response.ok) throw new Error('Failed to approve');
+
+                const item = contentQueue.find(n => n.node_id === selectedContentNode.node_id);
+                if (item) item.approval_status = 'approved';
+
+                renderContentQueue();
+                updateContentProgress();
+                selectNextPending('content');
+            } catch (error) {
+                alert('Error: ' + error.message);
+            }
+        }
+
+        async function regenerateContent() {
+            if (!selectedContentNode) return;
+
+            try {
+                document.getElementById('content-description').textContent = 'Regenerating...';
+
+                const response = await fetch(`/api/workflow/${currentJobId}/content/${selectedContentNode.node_id}/regenerate`, {
+                    method: 'POST'
+                });
+
+                if (!response.ok) throw new Error('Failed to regenerate');
+
+                const data = await response.json();
+
+                const item = contentQueue.find(n => n.node_id === selectedContentNode.node_id);
+                if (item && data.atom_content) {
+                    item.atom_content = data.atom_content;
+                }
+
+                selectContentNode(item);
+            } catch (error) {
+                alert('Error: ' + error.message);
+            }
+        }
+
+        function openEditModal() {
+            if (!selectedContentNode || !selectedContentNode.atom_content) return;
+
+            const content = selectedContentNode.atom_content;
+            document.getElementById('edit-description').value = content.description || '';
+            document.getElementById('edit-statement').value = content.statement || '';
+            document.getElementById('edit-proof').value = content.proof || '';
+            document.getElementById('edit-related').value = content.related_content || '';
+
+            document.getElementById('edit-modal').classList.remove('hidden');
+        }
+
+        function closeEditModal() {
+            document.getElementById('edit-modal').classList.add('hidden');
+        }
+
+        async function saveEdit() {
+            if (!selectedContentNode) return;
+
+            const editData = {
+                description: document.getElementById('edit-description').value,
+                statement: document.getElementById('edit-statement').value,
+                proof: document.getElementById('edit-proof').value || null,
+                lemmas: [],
+                related_content: document.getElementById('edit-related').value || null
+            };
+
+            try {
+                const response = await fetch(`/api/workflow/${currentJobId}/content/${selectedContentNode.node_id}/edit`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(editData)
+                });
+
+                if (!response.ok) throw new Error('Failed to save');
+
+                const item = contentQueue.find(n => n.node_id === selectedContentNode.node_id);
+                if (item) {
+                    item.atom_content = editData;
+                    item.approval_status = 'approved';
+                }
+
+                closeEditModal();
+                renderContentQueue();
+                updateContentProgress();
+                selectNextPending('content');
+            } catch (error) {
+                alert('Error: ' + error.message);
+            }
+        }
+
+        async function approveAllContent() {
+            const pending = contentQueue.filter(n => n.approval_status !== 'approved');
+            if (pending.length === 0) return;
+
+            if (!confirm(`Approve all ${pending.length} remaining content summaries?`)) return;
+
+            try {
+                document.getElementById('approve-all-content-btn').disabled = true;
+
+                const response = await fetch(`/api/workflow/${currentJobId}/approve-all-content`, {
+                    method: 'POST'
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'Failed to approve all');
+                }
+
+                // Reload queue
+                await loadContentApproval();
+            } catch (error) {
+                alert('Error: ' + error.message);
+                await loadContentApproval();
+            } finally {
+                document.getElementById('approve-all-content-btn').disabled = false;
+            }
+        }
+
+        async function completeWorkflow() {
+            try {
+                const response = await fetch(`/api/workflow/${currentJobId}/complete`, {
+                    method: 'POST'
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'Failed to complete');
+                }
+
+                await checkWorkflowStage();
+            } catch (error) {
+                alert('Error: ' + error.message);
+            }
+        }
+
+        // OCR text review
+        let ocrFullText = null;
+        let ocrTextExpanded = false;
+
+        async function loadOcrReview() {
+            try {
+                const response = await fetch(`/api/workflow/${currentJobId}/ocr-text`);
+                if (!response.ok) {
+                    // No OCR text available, skip directly to structure approval
+                    console.log('No OCR text available, skipping to structure approval');
+                    await loadStructureApproval();
+                    return;
+                }
+
+                const data = await response.json();
+                ocrFullText = data.text;
+
+                // Show preview (first 3000 chars)
+                const previewText = ocrFullText.length > 3000
+                    ? ocrFullText.substring(0, 3000) + '\n\n... (truncated, click "Show Full Text" to see all)'
+                    : ocrFullText;
+                document.getElementById('ocr-preview-content').textContent = previewText;
+                document.getElementById('ocr-full-content').textContent = ocrFullText;
+                document.getElementById('ocr-text-length').textContent = `${data.length.toLocaleString()} characters`;
+
+                hideAllSections();
+                document.getElementById('ocr-review-section').classList.remove('hidden');
+
+                // Show preview by default
+                document.getElementById('ocr-text-preview').classList.remove('hidden');
+                document.getElementById('ocr-text-full').classList.add('hidden');
+                ocrTextExpanded = false;
+            } catch (error) {
+                console.error('Failed to load OCR text:', error);
+                // Fall through to structure approval
+                await loadStructureApproval();
+            }
+        }
+
+        function toggleOcrText() {
+            ocrTextExpanded = !ocrTextExpanded;
+            const btn = document.getElementById('ocr-toggle-btn');
+            if (ocrTextExpanded) {
+                document.getElementById('ocr-text-preview').classList.add('hidden');
+                document.getElementById('ocr-text-full').classList.remove('hidden');
+                btn.textContent = 'Show Preview';
+            } else {
+                document.getElementById('ocr-text-preview').classList.remove('hidden');
+                document.getElementById('ocr-text-full').classList.add('hidden');
+                btn.textContent = 'Show Full Text';
+            }
+        }
+
+        function dismissOcrReview() {
+            document.getElementById('ocr-review-section').classList.add('hidden');
+            loadStructureApproval();
+        }
+
+        // Atomization content viewer
+        function toggleAtomizationContent(mode) {
+            const previewDiv = document.getElementById('atomization-content-preview');
+            const fullDiv = document.getElementById('atomization-content-full');
+            const previewBtn = document.getElementById('atom-content-preview-btn');
+            const fullBtn = document.getElementById('atom-content-full-btn');
+
+            if (mode === 'preview') {
+                previewDiv.classList.remove('hidden');
+                fullDiv.classList.add('hidden');
+                previewBtn.classList.add('bg-gray-200', 'text-gray-700');
+                previewBtn.classList.remove('text-blue-600');
+                fullBtn.classList.remove('bg-gray-200', 'text-gray-700');
+                fullBtn.classList.add('text-blue-600');
+            } else {
+                fullDiv.classList.remove('hidden');
+                previewDiv.classList.add('hidden');
+                fullBtn.classList.add('bg-gray-200', 'text-gray-700');
+                fullBtn.classList.remove('text-blue-600');
+                previewBtn.classList.remove('bg-gray-200', 'text-gray-700');
+                previewBtn.classList.add('text-blue-600');
+            }
+        }
+
+        // Utility functions
+        function selectNextPending(type) {
+            const queue = type === 'atomization' ? atomizationQueue : contentQueue;
+            const next = queue.find(n => n.approval_status !== 'approved');
+            if (next) {
+                if (type === 'atomization') {
+                    selectAtomizationNode(next);
+                } else {
+                    selectContentNode(next);
+                }
+            }
+        }
+
+        function toggleContentPreview(type) {
+            if (type === 'source') {
+                document.getElementById('source-content-preview').classList.toggle('hidden');
+            }
+        }
+
+        // Tree rendering
+        function renderTree(structure) {
+            const container = document.getElementById('tree-view');
+            container.innerHTML = '';
+
+            const rootNode = createTreeNode(structure.root, true);
+            container.appendChild(rootNode);
+        }
+
+        function renderFinalTree(structure) {
+            const container = document.getElementById('final-tree-view');
+            container.innerHTML = '';
+
+            const rootNode = createTreeNode(structure.root, true);
+            container.appendChild(rootNode);
+        }
+
+        function createTreeNode(node, isRoot = false) {
+            const div = document.createElement('div');
+            div.className = `tree-node ${isRoot ? 'tree-node-root' : ''} ${!node.included ? 'filtered' : ''}`;
+
+            const header = document.createElement('div');
+            header.className = 'flex items-center py-1 cursor-pointer hover:bg-gray-50 rounded px-2';
+
+            // Toggle icon
+            const hasChildren = node.children && node.children.length > 0;
+            const toggleIcon = document.createElement('span');
+            toggleIcon.className = 'mr-2 text-gray-400';
+            toggleIcon.textContent = hasChildren ? '>' : '-';
+            header.appendChild(toggleIcon);
+
+            // Type badge
+            const badge = document.createElement('span');
+            badge.className = 'px-2 py-0.5 text-xs rounded mr-2 ' + getTypeBadgeClass(node.type);
+            badge.textContent = node.type;
+            header.appendChild(badge);
+
+            // Title
+            const title = document.createElement('span');
+            title.className = 'flex-1';
+            title.textContent = node.title;
+            header.appendChild(title);
+
+            // Include toggle for filtered items
+            if (!node.included) {
+                const includeBtn = document.createElement('button');
+                includeBtn.className = 'text-xs text-blue-600 hover:text-blue-800';
+                includeBtn.textContent = 'Include';
+                includeBtn.onclick = (e) => {
+                    e.stopPropagation();
+                    toggleInclusion(node.id, true);
+                };
+                header.appendChild(includeBtn);
+            }
+
+            div.appendChild(header);
+
+            // Children container
+            if (hasChildren) {
+                const childrenDiv = document.createElement('div');
+                childrenDiv.className = 'ml-4 border-l border-gray-200 pl-2 hidden';
+
+                for (const child of node.children) {
+                    childrenDiv.appendChild(createTreeNode(child));
+                }
+
+                div.appendChild(childrenDiv);
+
+                // Toggle collapse
+                header.onclick = () => {
+                    childrenDiv.classList.toggle('hidden');
+                    toggleIcon.textContent = childrenDiv.classList.contains('hidden') ? '>' : 'v';
+                };
+            }
+
+            return div;
+        }
+
+        function getTypeBadgeClass(type) {
+            const classes = {
+                'book': 'bg-purple-100 text-purple-700',
+                'chapter': 'bg-blue-100 text-blue-700',
+                'section': 'bg-green-100 text-green-700',
+                'subsection': 'bg-yellow-100 text-yellow-700',
+                'content': 'bg-gray-100 text-gray-700'
+            };
+            return classes[type] || classes['content'];
+        }
+
+        async function toggleInclusion(sectionId, included) {
+            try {
+                await fetch(`/api/preview/${currentJobId}/toggle/${sectionId}?included=${included}`, {
+                    method: 'POST'
+                });
+                await loadStructureApproval();
+            } catch (error) {
+                alert('Failed to update: ' + error.message);
+            }
+        }
+
+        async function exportToFolder() {
+            try {
+                const response = await fetch(`/api/export/${currentJobId}`, {
+                    method: 'POST'
+                });
+                const data = await response.json();
+
+                document.getElementById('export-result').classList.remove('hidden');
+                document.getElementById('export-message').textContent = data.message;
+            } catch (error) {
+                alert('Export failed: ' + error.message);
+            }
+        }
+
+        async function downloadZip() {
+            window.location.href = `/api/export/${currentJobId}/download`;
+        }
+
+        function resetUpload() {
+            document.getElementById('upload-section').classList.remove('hidden');
+            document.getElementById('progress-section').classList.add('hidden');
+            document.getElementById('workflow-indicator').classList.add('hidden');
+            hideAllSections();
+            document.getElementById('export-result').classList.add('hidden');
+            currentJobId = null;
+            workflowStage = null;
+            ocrFullText = null;
+            ocrTextExpanded = false;
+            atomizationQueue = [];
+            selectedAtomizationNode = null;
+            contentQueue = [];
+            selectedContentNode = null;
+            if (pollInterval) {
+                clearInterval(pollInterval);
+            }
+        }
+    </script>
+</body>
+</html>

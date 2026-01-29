@@ -1,0 +1,26 @@
+# Web framework
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+python-multipart>=0.0.6
+
+# PDF processing
+PyMuPDF>=1.23.0
+pdf2image>=1.16.0
+Pillow>=10.0.0
+
+# AI providers
+openai>=1.10.0
+anthropic>=0.18.0
+google-generativeai>=0.3.0
+
+# Data validation and settings
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+python-dotenv>=1.0.0
+
+# Async utilities
+aiofiles>=23.0.0
+
+# Optional: for similarity/embeddings (Phase 2)
+# numpy>=1.24.0
+# faiss-cpu>=1.7.0
